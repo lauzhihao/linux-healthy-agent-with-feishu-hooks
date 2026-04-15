@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Linux Healthy Agent periodically
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=linux-healthy-agent.service
+
+[Install]
+WantedBy=timers.target

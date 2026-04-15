@@ -1,0 +1,10 @@
+/target/
+.env
+.env.*
+*.pem
+*.key
+*.secret
+*.token
+*.log
+linux-healthy-agent-alert.json
+ec2-resource-probe-alert.json
