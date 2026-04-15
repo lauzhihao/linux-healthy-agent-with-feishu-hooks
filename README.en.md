@@ -208,6 +208,26 @@ Or pass it with CLI:
 ./linux-healthy-agent --webhook-url "$FEISHU_WEBHOOK_URL"
 ```
 
+When multiple machines share one Feishu bot, set a machine identity:
+
+```bash
+export LINUX_HEALTHY_AGENT_INSTANCE_NAME="prod-gpu-eu-01"
+./linux-healthy-agent
+```
+
+Or use CLI:
+
+```bash
+./linux-healthy-agent --instance-name prod-gpu-eu-01
+```
+
+Alert messages include:
+
+- `machine`
+- `hostname`
+- `kernel`
+- `machine_id`
+
 Alert policy:
 
 - `critical`: sent immediately every time.
@@ -239,6 +259,7 @@ sudoedit /etc/linux-healthy-agent.env
 
 ```bash
 FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/REPLACE_ME
+LINUX_HEALTHY_AGENT_INSTANCE_NAME=prod-gpu-eu-01
 ```
 
 Enable the timer:

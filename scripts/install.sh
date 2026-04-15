@@ -174,6 +174,8 @@ TIMER
         cat >/etc/linux-healthy-agent.env <<'ENVFILE'
 # Optional. Do not commit real webhook URLs to Git.
 # FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/REPLACE_ME
+# Optional. Used as the machine label in Feishu alerts.
+# LINUX_HEALTHY_AGENT_INSTANCE_NAME=prod-gpu-eu-01
 ENVFILE
     fi
     systemctl daemon-reload

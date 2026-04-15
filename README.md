@@ -204,6 +204,26 @@ export FEISHU_WEBHOOK_URL="https://open.feishu.cn/open-apis/bot/v2/hook/..."
 ./linux-healthy-agent --webhook-url "$FEISHU_WEBHOOK_URL"
 ```
 
+多台机器共用同一个飞书机器人时，建议设置机器标识：
+
+```bash
+export LINUX_HEALTHY_AGENT_INSTANCE_NAME="prod-gpu-eu-01"
+./linux-healthy-agent
+```
+
+也可以使用 CLI 参数：
+
+```bash
+./linux-healthy-agent --instance-name prod-gpu-eu-01
+```
+
+告警消息会包含：
+
+- `machine`
+- `hostname`
+- `kernel`
+- `machine_id`
+
 告警策略：
 
 - `critical`：检测到即发送，不限频。
@@ -235,6 +255,7 @@ sudoedit /etc/linux-healthy-agent.env
 
 ```bash
 FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/REPLACE_ME
+LINUX_HEALTHY_AGENT_INSTANCE_NAME=prod-gpu-eu-01
 ```
 
 启用：

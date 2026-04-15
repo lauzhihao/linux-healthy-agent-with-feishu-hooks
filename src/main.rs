@@ -7,6 +7,7 @@ use linux_healthy_agent::docker::collect_docker_health;
 use linux_healthy_agent::gpu::{
     collect_gpu_metrics, collect_gpu_processes, GpuQueryError, GpuQueryErrorKind,
 };
+use linux_healthy_agent::identity::collect_machine_identity;
 use linux_healthy_agent::model::{CheckResult, ProbeReport, Status, Thresholds};
 use linux_healthy_agent::procfs::{
     calculate_cpu_busy_percent, calculate_disk_rates, calculate_network_rates, disk_usage,
@@ -74,6 +75,9 @@ struct Args {
 
     #[arg(long)]
     webhook_url: Option<String>,
+
+    #[arg(long)]
+    instance_name: Option<String>,
 
     #[arg(long)]
     alert_state_file: Option<PathBuf>,
@@ -386,10 +390,12 @@ fn collect_report(args: &Args) -> io::Result<ProbeReport> {
 
     let status = worst_status(&checks);
     let gpu_metrics: Vec<_> = gpu_samples.iter().flatten().cloned().collect();
+    let identity = collect_machine_identity(args.instance_name.as_deref());
     Ok(ProbeReport {
         schema_version: 1,
         timestamp_unix: now_unix(),
-        hostname: hostname(),
+        hostname: identity.hostname.clone(),
+        identity,
         status,
         elapsed_seconds: elapsed,
         checks,
@@ -464,8 +470,11 @@ fn alert_message(report: &ProbeReport) -> String {
         .filter(|check| check.status == Status::Warning)
         .collect();
     let mut lines = vec![
-        format!("EC2 resource probe status: {:?}", report.status),
-        format!("host: {}", report.hostname),
+        format!("Linux Healthy Agent status: {:?}", report.status),
+        format!("machine: {}", report.identity.display_name),
+        format!("hostname: {}", report.identity.hostname),
+        format!("kernel: {}", report.identity.kernel),
+        format!("machine_id: {}", report.identity.machine_id_short),
         format!("timestamp_unix: {}", report.timestamp_unix),
     ];
     if !critical.is_empty() {
@@ -532,6 +541,7 @@ fn run() -> i32 {
             schema_version: 1,
             timestamp_unix: now_unix(),
             hostname: hostname(),
+            identity: collect_machine_identity(args.instance_name.as_deref()),
             status: Status::Critical,
             elapsed_seconds: 0.0,
             checks: vec![check_result(

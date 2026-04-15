@@ -1,6 +1,7 @@
 use linux_healthy_agent::checks::{evaluate_gpu, evaluate_memory};
 use linux_healthy_agent::docker::{parse_docker_ps, summarize_containers};
 use linux_healthy_agent::gpu::parse_gpu_metrics;
+use linux_healthy_agent::identity::collect_machine_identity;
 use linux_healthy_agent::model::{CpuTimes, DiskStat, GpuMetric, Status, Thresholds};
 use linux_healthy_agent::procfs::{
     calculate_cpu_busy_percent, calculate_disk_rates, parse_diskstats, parse_meminfo,
@@ -164,4 +165,22 @@ fn docker_summary_omits_healthy_running_containers_from_abnormal_list() {
     assert_eq!(summary.total, 1);
     assert_eq!(summary.running, 1);
     assert_eq!(summary.abnormal_containers.len(), 0);
+}
+
+#[test]
+fn machine_identity_prefers_explicit_instance_name() {
+    let identity = collect_machine_identity(Some("prod-gpu-eu-01"));
+
+    assert_eq!(identity.display_name, "prod-gpu-eu-01");
+    assert!(!identity.hostname.is_empty());
+    assert!(!identity.kernel.is_empty());
+    assert!(!identity.machine_id_short.is_empty());
+}
+
+#[test]
+fn machine_identity_falls_back_when_instance_name_is_blank() {
+    let identity = collect_machine_identity(Some("   "));
+
+    assert!(!identity.display_name.trim().is_empty());
+    assert!(!identity.hostname.is_empty());
 }

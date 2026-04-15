@@ -1,6 +1,8 @@
 use serde::Serialize;
 use std::collections::BTreeMap;
 
+use crate::identity::MachineIdentity;
+
 pub const BYTES_PER_KIB: f64 = 1024.0;
 pub const BYTES_PER_MIB: f64 = 1024.0 * 1024.0;
 pub const BYTES_PER_GIB: f64 = 1024.0 * 1024.0 * 1024.0;
@@ -179,6 +181,7 @@ pub struct ProbeReport {
     pub schema_version: u32,
     pub timestamp_unix: u64,
     pub hostname: String,
+    pub identity: MachineIdentity,
     pub status: Status,
     pub elapsed_seconds: f64,
     pub checks: Vec<CheckResult>,
