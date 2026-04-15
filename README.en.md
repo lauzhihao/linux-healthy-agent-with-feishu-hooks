@@ -48,7 +48,54 @@ Warning alert throttling needs a state file. Use tmpfs such as `/run`:
 --alert-state-file /run/linux-healthy-agent-alert.json
 ```
 
-## Build
+## One-Line Install
+
+For servers, install the prebuilt static binary from GitHub Releases. No Rust
+toolchain or source build is required:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lauzhihao/linux-healthy-agent-with-feishu-hooks/main/scripts/install.sh | sudo sh
+```
+
+Install a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lauzhihao/linux-healthy-agent-with-feishu-hooks/main/scripts/install.sh \
+  | sudo sh -s -- --version v0.1.0
+```
+
+Overwrite an existing binary:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lauzhihao/linux-healthy-agent-with-feishu-hooks/main/scripts/install.sh \
+  | sudo sh -s -- --force
+```
+
+Install and enable the systemd timer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lauzhihao/linux-healthy-agent-with-feishu-hooks/main/scripts/install.sh \
+  | sudo sh -s -- --with-systemd
+```
+
+The installer:
+
+- Checks that the system is Linux x86_64.
+- Downloads the `x86_64-unknown-linux-musl` static binary from GitHub Releases.
+- Downloads and verifies SHA256.
+- Installs to `/usr/local/bin/linux-healthy-agent`.
+- Does not write any real webhook URL.
+- Installs systemd timer only when `--with-systemd` is passed.
+
+Safer install flow:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/lauzhihao/linux-healthy-agent-with-feishu-hooks/main/scripts/install.sh
+less install.sh
+sudo sh install.sh
+```
+
+## Build From Source
 
 Install Rust, then run:
 
@@ -200,6 +247,34 @@ Enable the timer:
 sudo systemctl daemon-reload
 sudo systemctl enable --now linux-healthy-agent.timer
 ```
+
+With the installer:
+
+```bash
+sudo sh scripts/install.sh --with-systemd
+```
+
+Then edit the local environment file:
+
+```bash
+sudoedit /etc/linux-healthy-agent.env
+```
+
+Do not commit real webhook URLs to Git.
+
+## Release
+
+Maintainers can create a release by pushing a tag:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The release workflow uploads:
+
+- `linux-healthy-agent-x86_64-unknown-linux-musl.tar.gz`
+- `linux-healthy-agent-x86_64-unknown-linux-musl.tar.gz.sha256`
 
 ## Exit Code
 
