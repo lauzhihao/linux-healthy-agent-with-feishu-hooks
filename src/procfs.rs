@@ -86,6 +86,26 @@ pub fn parse_loadavg(text: &str) -> io::Result<BTreeMap<String, f64>> {
     Ok(loadavg)
 }
 
+pub fn parse_uptime_seconds(text: &str) -> f64 {
+    text.split_whitespace()
+        .next()
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(0.0)
+}
+
+pub fn count_processes(proc_root: &Path) -> io::Result<usize> {
+    let mut count = 0;
+    for entry in fs::read_dir(proc_root)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.chars().all(|ch| ch.is_ascii_digit()) {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
 pub fn parse_pressure(text: &str) -> BTreeMap<String, BTreeMap<String, f64>> {
     let mut result = BTreeMap::new();
     for line in text.lines() {

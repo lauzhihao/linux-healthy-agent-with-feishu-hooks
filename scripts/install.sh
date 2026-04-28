@@ -145,8 +145,9 @@ Documentation=https://github.com/lauzhihao/linux-healthy-agent-with-feishu-hooks
 
 [Service]
 Type=oneshot
+Environment=LINUX_HEALTHY_AGENT_OUTPUT_FILE=/run/linux-healthy-agent/latest.json
 EnvironmentFile=-/etc/linux-healthy-agent.env
-ExecStart=${DEST} --alert-state-file /run/linux-healthy-agent-alert.json
+ExecStart=${DEST} --alert-state-file /run/linux-healthy-agent-alert.json --output-file \${LINUX_HEALTHY_AGENT_OUTPUT_FILE}
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
@@ -154,7 +155,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/run
+ReadWritePaths=/run /mnt/host-fleet
 SERVICE
     cat >/etc/systemd/system/linux-healthy-agent.timer <<'TIMER'
 [Unit]
@@ -176,6 +177,15 @@ TIMER
 # FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/REPLACE_ME
 # Optional. Used as the machine label in Feishu alerts.
 # LINUX_HEALTHY_AGENT_INSTANCE_NAME=prod-gpu-eu-01
+# Optional. Used by Host Fleet snapshot aggregation.
+# LINUX_HEALTHY_AGENT_HOST_ID=aws-eu-south-2-gpu-01
+# LINUX_HEALTHY_AGENT_PROVIDER=aws
+# LINUX_HEALTHY_AGENT_CLOUD_REGION=eu-south-2
+# LINUX_HEALTHY_AGENT_ZONE=eu-south-2a
+# LINUX_HEALTHY_AGENT_FLEET_REGION=EU
+# LINUX_HEALTHY_AGENT_ROLE=GPU · Inference
+# Optional. Set to an object-storage mounted path for Host Fleet publishing.
+# LINUX_HEALTHY_AGENT_OUTPUT_FILE=/mnt/host-fleet/raw/linux-health/aws/eu-south-2/aws-eu-south-2-gpu-01/latest.json
 ENVFILE
     fi
     systemctl daemon-reload

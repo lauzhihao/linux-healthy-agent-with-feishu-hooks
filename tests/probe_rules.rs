@@ -4,8 +4,10 @@ use linux_healthy_agent::gpu::parse_gpu_metrics;
 use linux_healthy_agent::identity::collect_machine_identity;
 use linux_healthy_agent::model::{CpuTimes, DiskStat, GpuMetric, Status, Thresholds};
 use linux_healthy_agent::procfs::{
-    calculate_cpu_busy_percent, calculate_disk_rates, parse_diskstats, parse_meminfo,
+    calculate_cpu_busy_percent, calculate_disk_rates, count_processes, parse_diskstats,
+    parse_meminfo, parse_uptime_seconds,
 };
+use std::fs;
 
 #[test]
 fn cpu_busy_is_calculated_from_proc_stat_delta() {
@@ -81,6 +83,27 @@ fn diskstats_parser_finds_named_device() {
 
     assert_eq!(stats["nvme0n1"].read_ios, 10);
     assert_eq!(stats["nvme0n1"].write_ios, 30);
+}
+
+#[test]
+fn uptime_parser_reads_first_field() {
+    assert_eq!(parse_uptime_seconds("12345.67 8910.11\n"), 12345.67);
+    assert_eq!(parse_uptime_seconds("not-a-number 8910.11\n"), 0.0);
+}
+
+#[test]
+fn process_count_only_counts_numeric_proc_dirs() {
+    let root =
+        std::env::temp_dir().join(format!("linux-healthy-agent-test-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("1")).unwrap();
+    fs::create_dir_all(root.join("2048")).unwrap();
+    fs::create_dir_all(root.join("self")).unwrap();
+    fs::write(root.join("uptime"), "1.0 2.0\n").unwrap();
+
+    assert_eq!(count_processes(&root).unwrap(), 2);
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -169,8 +192,9 @@ fn docker_summary_omits_healthy_running_containers_from_abnormal_list() {
 
 #[test]
 fn machine_identity_prefers_explicit_instance_name() {
-    let identity = collect_machine_identity(Some("prod-gpu-eu-01"));
+    let identity = collect_machine_identity(Some("prod-gpu-eu-01"), Some("host-123"));
 
+    assert_eq!(identity.host_id, "host-123");
     assert_eq!(identity.display_name, "prod-gpu-eu-01");
     assert!(!identity.hostname.is_empty());
     assert!(!identity.kernel.is_empty());
@@ -179,8 +203,9 @@ fn machine_identity_prefers_explicit_instance_name() {
 
 #[test]
 fn machine_identity_falls_back_when_instance_name_is_blank() {
-    let identity = collect_machine_identity(Some("   "));
+    let identity = collect_machine_identity(Some("   "), Some("   "));
 
+    assert!(!identity.host_id.trim().is_empty());
     assert!(!identity.display_name.trim().is_empty());
     assert!(!identity.hostname.is_empty());
 }

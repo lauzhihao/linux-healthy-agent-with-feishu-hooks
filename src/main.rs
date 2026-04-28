@@ -8,18 +8,21 @@ use linux_healthy_agent::gpu::{
     collect_gpu_metrics, collect_gpu_processes, GpuQueryError, GpuQueryErrorKind,
 };
 use linux_healthy_agent::identity::collect_machine_identity;
-use linux_healthy_agent::model::{CheckResult, ProbeReport, Status, Thresholds};
+use linux_healthy_agent::model::{
+    CheckResult, DeploymentMetadata, ProbeReport, Status, Thresholds,
+};
 use linux_healthy_agent::procfs::{
-    calculate_cpu_busy_percent, calculate_disk_rates, calculate_network_rates, disk_usage,
-    parse_cpu_count, parse_loadavg, parse_meminfo, read_delta_inputs, read_pressure,
-    read_proc_text,
+    calculate_cpu_busy_percent, calculate_disk_rates, calculate_network_rates, count_processes,
+    disk_usage, parse_cpu_count, parse_loadavg, parse_meminfo, parse_uptime_seconds,
+    read_delta_inputs, read_pressure, read_proc_text,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
+use std::net::UdpSocket;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
@@ -80,6 +83,27 @@ struct Args {
     instance_name: Option<String>,
 
     #[arg(long)]
+    host_id: Option<String>,
+
+    #[arg(long)]
+    provider: Option<String>,
+
+    #[arg(long)]
+    cloud_region: Option<String>,
+
+    #[arg(long)]
+    zone: Option<String>,
+
+    #[arg(long)]
+    fleet_region: Option<String>,
+
+    #[arg(long)]
+    role: Option<String>,
+
+    #[arg(long)]
+    output_file: Option<PathBuf>,
+
+    #[arg(long)]
     alert_state_file: Option<PathBuf>,
 
     #[arg(long, default_value_t = 3600)]
@@ -115,6 +139,41 @@ fn hostname() -> String {
         .or_else(|| fs::read_to_string("/etc/hostname").ok())
         .map(|value| value.trim().to_string())
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn option_or_env(option: &Option<String>, env_key: &str) -> Option<String> {
+    option
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            env::var(env_key)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+}
+
+fn collect_deployment_metadata(args: &Args) -> Option<DeploymentMetadata> {
+    let metadata = DeploymentMetadata {
+        provider: option_or_env(&args.provider, "LINUX_HEALTHY_AGENT_PROVIDER"),
+        cloud_region: option_or_env(&args.cloud_region, "LINUX_HEALTHY_AGENT_CLOUD_REGION"),
+        zone: option_or_env(&args.zone, "LINUX_HEALTHY_AGENT_ZONE"),
+        fleet_region: option_or_env(&args.fleet_region, "LINUX_HEALTHY_AGENT_FLEET_REGION"),
+        role: option_or_env(&args.role, "LINUX_HEALTHY_AGENT_ROLE"),
+    };
+    if metadata.is_empty() {
+        None
+    } else {
+        Some(metadata)
+    }
+}
+
+fn primary_ip() -> Option<String> {
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    socket.local_addr().ok().map(|addr| addr.ip().to_string())
 }
 
 fn check_result(name: &str, status: Status, message: &str, values: Value) -> CheckResult {
@@ -258,6 +317,11 @@ fn collect_report(args: &Args) -> io::Result<ProbeReport> {
     let stat_text = read_proc_text(&args.proc_root, "stat")?;
     let cpu_count = parse_cpu_count(&stat_text);
     let loadavg = parse_loadavg(&read_proc_text(&args.proc_root, "loadavg")?)?;
+    let uptime_seconds = read_proc_text(&args.proc_root, "uptime")
+        .map(|text| parse_uptime_seconds(&text))
+        .unwrap_or(0.0);
+    let process_count = count_processes(&args.proc_root).unwrap_or(0);
+    let primary_ip = primary_ip();
     let pressure = read_pressure(&args.proc_root);
     let meminfo = parse_meminfo(&read_proc_text(&args.proc_root, "meminfo")?);
 
@@ -390,12 +454,13 @@ fn collect_report(args: &Args) -> io::Result<ProbeReport> {
 
     let status = worst_status(&checks);
     let gpu_metrics: Vec<_> = gpu_samples.iter().flatten().cloned().collect();
-    let identity = collect_machine_identity(args.instance_name.as_deref());
+    let identity = collect_machine_identity(args.instance_name.as_deref(), args.host_id.as_deref());
     Ok(ProbeReport {
-        schema_version: 1,
+        schema_version: 2,
         timestamp_unix: now_unix(),
         hostname: identity.hostname.clone(),
         identity,
+        deployment: collect_deployment_metadata(args),
         status,
         elapsed_seconds: elapsed,
         checks,
@@ -407,6 +472,9 @@ fn collect_report(args: &Args) -> io::Result<ProbeReport> {
                 "total_bytes": meminfo.get("MemTotal").copied().unwrap_or(0),
                 "available_bytes": meminfo.get("MemAvailable").copied().unwrap_or(0),
             },
+            "uptime_seconds": uptime_seconds,
+            "process_count": process_count,
+            "primary_ip": primary_ip,
             "disk_usage": disk_usages,
             "disk_io": disk_rates,
             "network": network_rates,
@@ -533,15 +601,39 @@ fn maybe_send_alert(args: &Args, report: &ProbeReport) {
     }
 }
 
+fn write_output_file(path: &Path, text: &str) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("linux-healthy-agent.json");
+    let tmp_path = path.with_file_name(format!(".{file_name}.{}.tmp", std::process::id()));
+    {
+        let mut file = fs::File::create(&tmp_path)?;
+        file.write_all(text.as_bytes())?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+    }
+    fs::rename(tmp_path, path)
+}
+
 fn run() -> i32 {
     let args = Args::parse();
     let report = match collect_report(&args) {
         Ok(report) => report,
         Err(error) => ProbeReport {
-            schema_version: 1,
+            schema_version: 2,
             timestamp_unix: now_unix(),
             hostname: hostname(),
-            identity: collect_machine_identity(args.instance_name.as_deref()),
+            identity: collect_machine_identity(
+                args.instance_name.as_deref(),
+                args.host_id.as_deref(),
+            ),
+            deployment: collect_deployment_metadata(&args),
             status: Status::Critical,
             elapsed_seconds: 0.0,
             checks: vec![check_result(
@@ -561,7 +653,15 @@ fn run() -> i32 {
         serde_json::to_string(&report)
     };
     match output {
-        Ok(text) => println!("{text}"),
+        Ok(text) => {
+            println!("{text}");
+            if let Some(path) = &args.output_file {
+                if let Err(error) = write_output_file(path, &text) {
+                    eprintln!("failed to write output file {}: {error}", path.display());
+                    return Status::Critical.exit_code();
+                }
+            }
+        }
         Err(error) => eprintln!("failed to serialize report: {error}"),
     }
     report.status.exit_code()

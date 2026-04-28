@@ -4,8 +4,9 @@ Documentation=https://github.com/lauzhihao/linux-healthy-agent-with-feishu-hooks
 
 [Service]
 Type=oneshot
+Environment=LINUX_HEALTHY_AGENT_OUTPUT_FILE=/run/linux-healthy-agent/latest.json
 EnvironmentFile=-/etc/linux-healthy-agent.env
-ExecStart=/usr/local/bin/linux-healthy-agent --alert-state-file /run/linux-healthy-agent-alert.json
+ExecStart=/usr/local/bin/linux-healthy-agent --alert-state-file /run/linux-healthy-agent-alert.json --output-file ${LINUX_HEALTHY_AGENT_OUTPUT_FILE}
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
@@ -13,4 +14,4 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/run
+ReadWritePaths=/run /mnt/host-fleet

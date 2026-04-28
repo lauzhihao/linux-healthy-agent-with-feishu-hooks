@@ -5,6 +5,7 @@ use std::process::Command;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct MachineIdentity {
+    pub host_id: String,
     pub display_name: String,
     pub hostname: String,
     pub kernel: String,
@@ -48,8 +49,12 @@ fn read_machine_id_short() -> String {
     }
 }
 
-pub fn collect_machine_identity(instance_name: Option<&str>) -> MachineIdentity {
+pub fn collect_machine_identity(
+    instance_name: Option<&str>,
+    host_id: Option<&str>,
+) -> MachineIdentity {
     let hostname = read_hostname();
+    let machine_id_short = read_machine_id_short();
     let env_name = env::var("LINUX_HEALTHY_AGENT_INSTANCE_NAME")
         .ok()
         .filter(|value| !value.trim().is_empty());
@@ -59,10 +64,26 @@ pub fn collect_machine_identity(instance_name: Option<&str>) -> MachineIdentity 
         .map(str::to_string)
         .or(env_name)
         .unwrap_or_else(|| hostname.clone());
+    let env_host_id = env::var("LINUX_HEALTHY_AGENT_HOST_ID")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let host_id = host_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or(env_host_id)
+        .unwrap_or_else(|| {
+            if machine_id_short == "unknown" {
+                hostname.clone()
+            } else {
+                machine_id_short.clone()
+            }
+        });
     MachineIdentity {
+        host_id,
         display_name,
         hostname,
         kernel: read_kernel(),
-        machine_id_short: read_machine_id_short(),
+        machine_id_short,
     }
 }

@@ -61,7 +61,7 @@ Install a specific version:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lauzhihao/linux-healthy-agent-with-feishu-hooks/main/scripts/install.sh \
-  | sudo sh -s -- --version v0.1.0
+  | sudo sh -s -- --version v0.1.3
 ```
 
 Overwrite an existing binary:
@@ -221,6 +221,45 @@ Or use CLI:
 ./linux-healthy-agent --instance-name prod-gpu-eu-01
 ```
 
+## Host Fleet snapshots
+
+For object storage publishing, mount the object-storage prefix as a local
+directory and let the agent write the latest snapshot directly into that mount:
+
+```bash
+./linux-healthy-agent \
+  --host-id aws-eu-south-2-gpu-01 \
+  --provider aws \
+  --cloud-region eu-south-2 \
+  --zone eu-south-2a \
+  --fleet-region EU \
+  --role "GPU · Inference" \
+  --output-file /mnt/host-fleet/raw/linux-health/aws/eu-south-2/aws-eu-south-2-gpu-01/latest.json
+```
+
+Equivalent environment variables:
+
+```bash
+LINUX_HEALTHY_AGENT_HOST_ID=aws-eu-south-2-gpu-01
+LINUX_HEALTHY_AGENT_PROVIDER=aws
+LINUX_HEALTHY_AGENT_CLOUD_REGION=eu-south-2
+LINUX_HEALTHY_AGENT_ZONE=eu-south-2a
+LINUX_HEALTHY_AGENT_FLEET_REGION=EU
+LINUX_HEALTHY_AGENT_ROLE=GPU · Inference
+```
+
+`--output-file` writes through a temporary file in the same directory and
+renames it into place. The stdout JSON output is preserved.
+
+With the example systemd sandbox settings, add the mount path to
+`ReadWritePaths`; the current example already includes `/mnt/host-fleet`.
+Before rollout, verify that the mount supports same-directory temporary writes
+and rename. If `--output-file` points at the mount, add
+`RequiresMountsFor=/mnt/host-fleet` in the service or drop-in so missing mounts
+fail visibly instead of writing to local disk. The agent does not provide direct
+object-storage upload support; when the dashboard cannot find data, check the
+mount, path, permissions, and aggregation job first.
+
 Alert messages include:
 
 - `machine`
@@ -288,8 +327,8 @@ Do not commit real webhook URLs to Git.
 Maintainers can create a release by pushing a tag:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.3
+git push origin v0.1.3
 ```
 
 The release workflow uploads:

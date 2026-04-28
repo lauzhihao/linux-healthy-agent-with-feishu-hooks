@@ -119,6 +119,30 @@ pub struct GpuProcess {
     pub command: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct DeploymentMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cloud_region: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zone: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fleet_region: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+}
+
+impl DeploymentMetadata {
+    pub fn is_empty(&self) -> bool {
+        self.provider.is_none()
+            && self.cloud_region.is_none()
+            && self.zone.is_none()
+            && self.fleet_region.is_none()
+            && self.role.is_none()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Thresholds {
     pub cpu_busy_warning: f64,
@@ -182,6 +206,8 @@ pub struct ProbeReport {
     pub timestamp_unix: u64,
     pub hostname: String,
     pub identity: MachineIdentity,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployment: Option<DeploymentMetadata>,
     pub status: Status,
     pub elapsed_seconds: f64,
     pub checks: Vec<CheckResult>,

@@ -57,7 +57,7 @@ curl -fsSL https://raw.githubusercontent.com/lauzhihao/linux-healthy-agent-with-
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lauzhihao/linux-healthy-agent-with-feishu-hooks/main/scripts/install.sh \
-  | sudo sh -s -- --version v0.1.0
+  | sudo sh -s -- --version v0.1.3
 ```
 
 覆盖已有 binary：
@@ -217,6 +217,42 @@ export LINUX_HEALTHY_AGENT_INSTANCE_NAME="prod-gpu-eu-01"
 ./linux-healthy-agent --instance-name prod-gpu-eu-01
 ```
 
+## Host Fleet 快照
+
+如果要把探针结果同步到对象存储，建议把对象存储挂载为本地目录，
+然后让 agent 直接把最新快照写到挂载目录中：
+
+```bash
+./linux-healthy-agent \
+  --host-id aws-eu-south-2-gpu-01 \
+  --provider aws \
+  --cloud-region eu-south-2 \
+  --zone eu-south-2a \
+  --fleet-region EU \
+  --role "GPU · Inference" \
+  --output-file /mnt/host-fleet/raw/linux-health/aws/eu-south-2/aws-eu-south-2-gpu-01/latest.json
+```
+
+等价环境变量：
+
+```bash
+LINUX_HEALTHY_AGENT_HOST_ID=aws-eu-south-2-gpu-01
+LINUX_HEALTHY_AGENT_PROVIDER=aws
+LINUX_HEALTHY_AGENT_CLOUD_REGION=eu-south-2
+LINUX_HEALTHY_AGENT_ZONE=eu-south-2a
+LINUX_HEALTHY_AGENT_FLEET_REGION=EU
+LINUX_HEALTHY_AGENT_ROLE=GPU · Inference
+```
+
+`--output-file` 使用同目录临时文件 + rename 写入，stdout JSON 输出仍会保留。
+
+如果使用 systemd 示例中的 sandbox 配置，需要把挂载目录加入
+`ReadWritePaths`；当前示例已预留 `/mnt/host-fleet`。上线前要验证挂载层支持同目录临时文件写入和 rename。
+如果 `--output-file` 指向挂载目录，建议在 service/drop-in 中加入
+`RequiresMountsFor=/mnt/host-fleet`，避免挂载缺失时写到本机磁盘。
+agent 不提供直传对象存储能力；监控页找不到数据时，优先检查挂载、路径、
+权限和整理程序。
+
 告警消息会包含：
 
 - `machine`
@@ -284,8 +320,8 @@ sudoedit /etc/linux-healthy-agent.env
 维护者打 tag 后会自动构建 Release asset：
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.3
+git push origin v0.1.3
 ```
 
 Release workflow 会上传：
