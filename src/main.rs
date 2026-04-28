@@ -3,7 +3,7 @@ use linux_healthy_agent::checks::{
     evaluate_cpu, evaluate_disk_io, evaluate_disk_usage, evaluate_gpu, evaluate_memory,
     evaluate_network, worst_status,
 };
-use linux_healthy_agent::docker::collect_docker_health;
+use linux_healthy_agent::docker::{collect_docker_health, DockerHealthSummary};
 use linux_healthy_agent::gpu::{
     collect_gpu_metrics, collect_gpu_processes, GpuQueryError, GpuQueryErrorKind,
 };
@@ -77,6 +77,9 @@ struct Args {
     pretty: bool,
 
     #[arg(long)]
+    enable_alerts: bool,
+
+    #[arg(long)]
     webhook_url: Option<String>,
 
     #[arg(long)]
@@ -106,6 +109,9 @@ struct Args {
     #[arg(long)]
     alert_state_file: Option<PathBuf>,
 
+    #[arg(long)]
+    alert_thresholds_file: Option<PathBuf>,
+
     #[arg(long, default_value_t = 3600)]
     warning_alert_interval_seconds: u64,
 
@@ -123,6 +129,14 @@ enum GpuMode {
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct AlertState {
     last_warning_sent_unix: u64,
+}
+
+struct AlertConfig {
+    webhook_url: String,
+    thresholds: Thresholds,
+    state_file: Option<PathBuf>,
+    warning_alert_interval_seconds: u64,
+    timeout: Duration,
 }
 
 fn now_unix() -> u64 {
@@ -155,6 +169,23 @@ fn option_or_env(option: &Option<String>, env_key: &str) -> Option<String> {
         })
 }
 
+fn path_option_or_env(option: &Option<PathBuf>, env_key: &str) -> Option<PathBuf> {
+    option.clone().or_else(|| {
+        env::var(env_key)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    })
+}
+
+fn env_flag(env_key: &str) -> bool {
+    env::var(env_key)
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
+}
+
 fn collect_deployment_metadata(args: &Args) -> Option<DeploymentMetadata> {
     let metadata = DeploymentMetadata {
         provider: option_or_env(&args.provider, "LINUX_HEALTHY_AGENT_PROVIDER"),
@@ -183,6 +214,77 @@ fn check_result(name: &str, status: Status, message: &str, values: Value) -> Che
         message: message.to_string(),
         values,
     }
+}
+
+fn alert_count_status(count: usize, warning: u64, critical: u64) -> Status {
+    let count = count as u64;
+    if critical > 0 && count >= critical {
+        Status::Critical
+    } else if warning > 0 && count >= warning {
+        Status::Warning
+    } else {
+        Status::Ok
+    }
+}
+
+fn evaluate_docker_alerts(
+    summary: &DockerHealthSummary,
+    thresholds: &Thresholds,
+) -> Vec<CheckResult> {
+    vec![
+        check_result(
+            "docker_container_unhealthy",
+            alert_count_status(
+                summary.unhealthy,
+                thresholds.docker_unhealthy_warning_count,
+                thresholds.docker_unhealthy_critical_count,
+            ),
+            "docker container healthcheck failed",
+            json!({
+                "unhealthy": summary.unhealthy,
+                "abnormal_containers": summary.abnormal_containers,
+            }),
+        ),
+        check_result(
+            "docker_container_restarting",
+            alert_count_status(
+                summary.restarting,
+                thresholds.docker_restarting_warning_count,
+                thresholds.docker_restarting_critical_count,
+            ),
+            "docker container is restarting",
+            json!({
+                "restarting": summary.restarting,
+                "abnormal_containers": summary.abnormal_containers,
+            }),
+        ),
+        check_result(
+            "docker_container_exited",
+            alert_count_status(
+                summary.exited,
+                thresholds.docker_exited_warning_count,
+                thresholds.docker_exited_critical_count,
+            ),
+            "docker container is not running",
+            json!({
+                "exited": summary.exited,
+                "abnormal_containers": summary.abnormal_containers,
+            }),
+        ),
+        check_result(
+            "docker_container_other_abnormal",
+            alert_count_status(
+                summary.other_abnormal,
+                thresholds.docker_other_abnormal_warning_count,
+                thresholds.docker_other_abnormal_critical_count,
+            ),
+            "docker container is in an unexpected state",
+            json!({
+                "other_abnormal": summary.other_abnormal,
+                "abnormal_containers": summary.abnormal_containers,
+            }),
+        ),
+    ]
 }
 
 fn collect_top_processes(limit: usize) -> Vec<Value> {
@@ -242,8 +344,10 @@ fn selected_disk_devices(args: &Args) -> Vec<String> {
     vec!["nvme0n1".to_string()]
 }
 
-fn collect_report(args: &Args) -> io::Result<ProbeReport> {
-    let thresholds = Thresholds::default();
+fn collect_report(
+    args: &Args,
+    alert_thresholds: Option<&Thresholds>,
+) -> io::Result<(ProbeReport, Vec<CheckResult>)> {
     let started = Instant::now();
     let (cpu_start, disk_start, net_start) = read_delta_inputs(&args.proc_root)?;
     let timeout = Duration::from_secs_f64(args.command_timeout.max(0.5));
@@ -353,34 +457,44 @@ fn collect_report(args: &Args) -> io::Result<ProbeReport> {
         }
     }
 
-    let mut checks = Vec::new();
-    checks.extend(evaluate_cpu(
-        calculate_cpu_busy_percent(cpu_start, cpu_end),
-        &loadavg,
-        cpu_count,
-        &pressure,
-        &thresholds,
-    ));
-    checks.extend(evaluate_memory(&meminfo, &thresholds));
-    checks.extend(evaluate_disk_usage(&disk_usages, &thresholds));
-    checks.extend(evaluate_disk_io(
-        &disk_rates,
-        &thresholds,
-        args.ebs_iops_limit,
-        args.ebs_throughput_mib_limit,
-    ));
-    checks.extend(evaluate_network(&network_rates));
-    checks.extend(evaluate_gpu(&gpu_samples, &thresholds));
-    if let Some(error) = &gpu_error {
-        match gpu_mode {
-            GpuMode::Required => {
-                errors.insert("gpu".to_string(), error.to_string());
-                checks.push(check_result(
+    let cpu_busy_percent = calculate_cpu_busy_percent(cpu_start, cpu_end);
+    let mut alert_checks = Vec::new();
+    if let Some(thresholds) = alert_thresholds {
+        alert_checks.extend(evaluate_cpu(
+            cpu_busy_percent,
+            &loadavg,
+            cpu_count,
+            &pressure,
+            thresholds,
+        ));
+        alert_checks.extend(evaluate_memory(&meminfo, thresholds));
+        alert_checks.extend(evaluate_disk_usage(&disk_usages, thresholds));
+        alert_checks.extend(evaluate_disk_io(
+            &disk_rates,
+            thresholds,
+            args.ebs_iops_limit,
+            args.ebs_throughput_mib_limit,
+        ));
+        alert_checks.extend(evaluate_network(&network_rates, thresholds));
+        alert_checks.extend(evaluate_gpu(&gpu_samples, thresholds));
+        if let Some(summary) = &docker_health {
+            alert_checks.extend(evaluate_docker_alerts(summary, thresholds));
+        }
+        if let Some(error) = &gpu_error {
+            if gpu_mode == GpuMode::Required {
+                alert_checks.push(check_result(
                     "gpu_collection",
                     Status::Critical,
                     "required gpu collector failed",
                     json!({"kind": error.kind, "error": error.message}),
                 ));
+            }
+        }
+    }
+    if let Some(error) = &gpu_error {
+        match gpu_mode {
+            GpuMode::Required => {
+                errors.insert("gpu".to_string(), error.to_string());
             }
             GpuMode::Auto => {
                 if !matches!(
@@ -388,83 +502,24 @@ fn collect_report(args: &Args) -> io::Result<ProbeReport> {
                     GpuQueryErrorKind::CommandMissing | GpuQueryErrorKind::NoDevices
                 ) {
                     errors.insert("gpu".to_string(), error.to_string());
-                    checks.push(check_result(
-                        "gpu_collection",
-                        Status::Warning,
-                        "optional gpu collector failed",
-                        json!({"kind": error.kind, "error": error.message}),
-                    ));
                 }
             }
             GpuMode::Disabled => {}
         }
     }
-    if let Some(error) = errors.get("gpu_processes") {
-        checks.push(check_result(
-            "gpu_process_collection",
-            Status::Warning,
-            "gpu process collector failed",
-            json!({"error": error}),
-        ));
-    }
-    if let Some(summary) = &docker_health {
-        if summary.unhealthy > 0 {
-            checks.push(check_result(
-                "docker_container_unhealthy",
-                Status::Critical,
-                "docker container healthcheck failed",
-                json!({
-                    "unhealthy": summary.unhealthy,
-                    "abnormal_containers": summary.abnormal_containers,
-                }),
-            ));
-        }
-        if summary.restarting > 0 {
-            checks.push(check_result(
-                "docker_container_restarting",
-                Status::Critical,
-                "docker container is restarting",
-                json!({
-                    "restarting": summary.restarting,
-                    "abnormal_containers": summary.abnormal_containers,
-                }),
-            ));
-        }
-        if summary.exited > 0 || summary.other_abnormal > 0 {
-            checks.push(check_result(
-                "docker_container_abnormal",
-                Status::Warning,
-                "docker container is not running",
-                json!({
-                    "exited": summary.exited,
-                    "other_abnormal": summary.other_abnormal,
-                    "abnormal_containers": summary.abnormal_containers,
-                }),
-            ));
-        }
-    }
-    if let Some(error) = errors.get("docker") {
-        checks.push(check_result(
-            "docker_collection",
-            Status::Warning,
-            "docker health collector failed",
-            json!({"error": error}),
-        ));
-    }
-
-    let status = worst_status(&checks);
     let gpu_metrics: Vec<_> = gpu_samples.iter().flatten().cloned().collect();
     let identity = collect_machine_identity(args.instance_name.as_deref(), args.host_id.as_deref());
-    Ok(ProbeReport {
-        schema_version: 2,
+    let report = ProbeReport {
+        schema_version: 3,
         timestamp_unix: now_unix(),
         hostname: identity.hostname.clone(),
         identity,
         deployment: collect_deployment_metadata(args),
-        status,
         elapsed_seconds: elapsed,
-        checks,
         metrics: json!({
+            "cpu": {
+                "busy_percent": cpu_busy_percent,
+            },
             "cpu_count": cpu_count,
             "loadavg": loadavg,
             "pressure": pressure,
@@ -486,7 +541,8 @@ fn collect_report(args: &Args) -> io::Result<ProbeReport> {
             "top_processes": collect_top_processes(args.top_processes),
         }),
         errors,
-    })
+    };
+    Ok((report, alert_checks))
 }
 
 fn read_alert_state(path: &Path) -> AlertState {
@@ -501,16 +557,16 @@ fn write_alert_state(path: &Path, state: &AlertState) -> io::Result<()> {
     fs::write(path, text)
 }
 
-fn should_send_warning_alert(args: &Args, now: u64) -> bool {
-    let Some(path) = &args.alert_state_file else {
+fn should_send_warning_alert(config: &AlertConfig, now: u64) -> bool {
+    let Some(path) = &config.state_file else {
         return true;
     };
     let state = read_alert_state(path);
-    now.saturating_sub(state.last_warning_sent_unix) >= args.warning_alert_interval_seconds
+    now.saturating_sub(state.last_warning_sent_unix) >= config.warning_alert_interval_seconds
 }
 
-fn mark_warning_alert_sent(args: &Args, now: u64) {
-    let Some(path) = &args.alert_state_file else {
+fn mark_warning_alert_sent(config: &AlertConfig, now: u64) {
+    let Some(path) = &config.state_file else {
         return;
     };
     let state = AlertState {
@@ -522,23 +578,66 @@ fn mark_warning_alert_sent(args: &Args, now: u64) {
 fn webhook_url(args: &Args) -> Option<String> {
     args.webhook_url
         .clone()
+        .or_else(|| env::var("LINUX_HEALTHY_AGENT_WEBHOOK_URL").ok())
         .or_else(|| env::var("FEISHU_WEBHOOK_URL").ok())
         .filter(|value| !value.trim().is_empty())
 }
 
-fn alert_message(report: &ProbeReport) -> String {
-    let critical: Vec<&CheckResult> = report
-        .checks
+fn load_alert_thresholds(path: &Path) -> Result<Thresholds, String> {
+    let text = fs::read_to_string(path).map_err(|error| {
+        format!(
+            "failed to read alert thresholds {}: {error}",
+            path.display()
+        )
+    })?;
+    serde_json::from_str(&text).map_err(|error| {
+        format!(
+            "failed to parse alert thresholds {}: {error}",
+            path.display()
+        )
+    })
+}
+
+fn alert_config(args: &Args) -> Result<Option<AlertConfig>, String> {
+    if !args.enable_alerts && !env_flag("LINUX_HEALTHY_AGENT_ENABLE_ALERTS") {
+        return Ok(None);
+    }
+
+    let webhook_url = webhook_url(args).ok_or_else(|| {
+        "alerts are enabled but no webhook was configured; set --webhook-url, FEISHU_WEBHOOK_URL, or LINUX_HEALTHY_AGENT_WEBHOOK_URL".to_string()
+    })?;
+    let thresholds_file = path_option_or_env(
+        &args.alert_thresholds_file,
+        "LINUX_HEALTHY_AGENT_ALERT_THRESHOLDS_FILE",
+    )
+    .ok_or_else(|| {
+        "alerts are enabled but no thresholds file was configured; set --alert-thresholds-file or LINUX_HEALTHY_AGENT_ALERT_THRESHOLDS_FILE".to_string()
+    })?;
+    let thresholds = load_alert_thresholds(&thresholds_file)?;
+
+    Ok(Some(AlertConfig {
+        webhook_url,
+        thresholds,
+        state_file: path_option_or_env(
+            &args.alert_state_file,
+            "LINUX_HEALTHY_AGENT_ALERT_STATE_FILE",
+        ),
+        warning_alert_interval_seconds: args.warning_alert_interval_seconds,
+        timeout: Duration::from_secs_f64(args.alert_timeout.max(0.5)),
+    }))
+}
+
+fn alert_message(report: &ProbeReport, checks: &[CheckResult], status: Status) -> String {
+    let critical: Vec<&CheckResult> = checks
         .iter()
         .filter(|check| check.status == Status::Critical)
         .collect();
-    let warnings: Vec<&CheckResult> = report
-        .checks
+    let warnings: Vec<&CheckResult> = checks
         .iter()
         .filter(|check| check.status == Status::Warning)
         .collect();
     let mut lines = vec![
-        format!("Linux Healthy Agent status: {:?}", report.status),
+        format!("Linux Healthy Agent alert status: {:?}", status),
         format!("machine: {}", report.identity.display_name),
         format!("hostname: {}", report.identity.hostname),
         format!("kernel: {}", report.identity.kernel),
@@ -575,29 +674,34 @@ fn send_feishu_alert(url: &str, text: &str, timeout: Duration) -> io::Result<()>
         .map_err(|error| io::Error::other(error.to_string()))
 }
 
-fn maybe_send_alert(args: &Args, report: &ProbeReport) {
-    let Some(url) = webhook_url(args) else {
+fn maybe_send_alert(config: Option<&AlertConfig>, report: &ProbeReport, checks: &[CheckResult]) {
+    let Some(config) = config else {
         return;
     };
-    if report.status == Status::Ok {
+    let status = worst_status(checks);
+    if status == Status::Ok {
         return;
     }
 
     let now = now_unix();
-    let should_send = if report.status == Status::Critical {
+    let should_send = if status == Status::Critical {
         true
     } else {
-        should_send_warning_alert(args, now)
+        should_send_warning_alert(config, now)
     };
     if !should_send {
         return;
     }
 
-    let timeout = Duration::from_secs_f64(args.alert_timeout.max(0.5));
-    if send_feishu_alert(&url, &alert_message(report), timeout).is_ok()
-        && report.status == Status::Warning
+    if send_feishu_alert(
+        &config.webhook_url,
+        &alert_message(report, checks, status),
+        config.timeout,
+    )
+    .is_ok()
+        && status == Status::Warning
     {
-        mark_warning_alert_sent(args, now);
+        mark_warning_alert_sent(config, now);
     }
 }
 
@@ -623,30 +727,42 @@ fn write_output_file(path: &Path, text: &str) -> io::Result<()> {
 
 fn run() -> i32 {
     let args = Args::parse();
-    let report = match collect_report(&args) {
-        Ok(report) => report,
-        Err(error) => ProbeReport {
-            schema_version: 2,
-            timestamp_unix: now_unix(),
-            hostname: hostname(),
-            identity: collect_machine_identity(
-                args.instance_name.as_deref(),
-                args.host_id.as_deref(),
-            ),
-            deployment: collect_deployment_metadata(&args),
-            status: Status::Critical,
-            elapsed_seconds: 0.0,
-            checks: vec![check_result(
+    let alert_config = match alert_config(&args) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("{error}");
+            return 2;
+        }
+    };
+    let alert_thresholds = alert_config.as_ref().map(|config| &config.thresholds);
+    let mut probe_failed = false;
+    let (report, alert_checks) = match collect_report(&args, alert_thresholds) {
+        Ok(collected) => collected,
+        Err(error) => {
+            probe_failed = true;
+            let report = ProbeReport {
+                schema_version: 3,
+                timestamp_unix: now_unix(),
+                hostname: hostname(),
+                identity: collect_machine_identity(
+                    args.instance_name.as_deref(),
+                    args.host_id.as_deref(),
+                ),
+                deployment: collect_deployment_metadata(&args),
+                elapsed_seconds: 0.0,
+                metrics: json!({}),
+                errors: BTreeMap::from([("probe".to_string(), error.to_string())]),
+            };
+            let checks = vec![check_result(
                 "probe_failure",
                 Status::Critical,
                 "probe failed",
                 json!({"error": error.to_string()}),
-            )],
-            metrics: json!({}),
-            errors: BTreeMap::from([("probe".to_string(), error.to_string())]),
-        },
+            )];
+            (report, checks)
+        }
     };
-    maybe_send_alert(&args, &report);
+    maybe_send_alert(alert_config.as_ref(), &report, &alert_checks);
     let output = if args.pretty {
         serde_json::to_string_pretty(&report)
     } else {
@@ -658,13 +774,20 @@ fn run() -> i32 {
             if let Some(path) = &args.output_file {
                 if let Err(error) = write_output_file(path, &text) {
                     eprintln!("failed to write output file {}: {error}", path.display());
-                    return Status::Critical.exit_code();
+                    return 2;
                 }
             }
         }
-        Err(error) => eprintln!("failed to serialize report: {error}"),
+        Err(error) => {
+            eprintln!("failed to serialize report: {error}");
+            return 2;
+        }
     }
-    report.status.exit_code()
+    if probe_failed {
+        2
+    } else {
+        0
+    }
 }
 
 fn main() {

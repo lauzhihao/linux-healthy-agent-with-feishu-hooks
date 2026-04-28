@@ -6,7 +6,7 @@ Documentation=https://github.com/lauzhihao/linux-healthy-agent-with-feishu-hooks
 Type=oneshot
 Environment=LINUX_HEALTHY_AGENT_OUTPUT_FILE=/run/linux-healthy-agent/latest.json
 EnvironmentFile=-/etc/linux-healthy-agent.env
-ExecStart=/usr/local/bin/linux-healthy-agent --alert-state-file /run/linux-healthy-agent-alert.json --output-file ${LINUX_HEALTHY_AGENT_OUTPUT_FILE}
+ExecStart=/usr/local/bin/linux-healthy-agent --output-file ${LINUX_HEALTHY_AGENT_OUTPUT_FILE}
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7

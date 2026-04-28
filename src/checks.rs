@@ -182,7 +182,20 @@ pub fn evaluate_disk_io(
         .collect()
 }
 
-pub fn evaluate_network(rates: &BTreeMap<String, Value>) -> Vec<CheckResult> {
+fn count_status(count: u64, warning: u64, critical: u64) -> Status {
+    if critical > 0 && count >= critical {
+        Status::Critical
+    } else if warning > 0 && count >= warning {
+        Status::Warning
+    } else {
+        Status::Ok
+    }
+}
+
+pub fn evaluate_network(
+    rates: &BTreeMap<String, Value>,
+    thresholds: &Thresholds,
+) -> Vec<CheckResult> {
     rates
         .iter()
         .map(|(interface, value)| {
@@ -190,11 +203,11 @@ pub fn evaluate_network(rates: &BTreeMap<String, Value>) -> Vec<CheckResult> {
                 + value["tx_errors_delta"].as_u64().unwrap_or(0)
                 + value["rx_drops_delta"].as_u64().unwrap_or(0)
                 + value["tx_drops_delta"].as_u64().unwrap_or(0);
-            let status = if error_delta > 0 {
-                Status::Warning
-            } else {
-                Status::Ok
-            };
+            let status = count_status(
+                error_delta,
+                thresholds.network_errors_warning_delta,
+                thresholds.network_errors_critical_delta,
+            );
             let mut values = value.clone();
             values["interface"] = json!(interface);
             check(

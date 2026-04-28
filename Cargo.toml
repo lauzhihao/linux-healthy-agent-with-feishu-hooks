@@ -1,8 +1,8 @@
 [package]
 name = "linux-healthy-agent"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
-description = "Read-only low-overhead Linux health agent with Feishu webhook alerts"
+description = "Read-only low-overhead Linux metric snapshot agent with optional Feishu alerts"
 license = "MIT"
 repository = "https://github.com/lauzhihao/linux-healthy-agent-with-feishu-hooks"
 readme = "README.md"

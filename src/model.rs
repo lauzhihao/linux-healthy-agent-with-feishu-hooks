@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::identity::MachineIdentity;
@@ -143,7 +143,8 @@ impl DeploymentMetadata {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Thresholds {
     pub cpu_busy_warning: f64,
     pub cpu_busy_critical: f64,
@@ -168,6 +169,16 @@ pub struct Thresholds {
     pub gpu_temp_critical: f64,
     pub gpu_idle_memory_percent: f64,
     pub gpu_idle_util_percent: f64,
+    pub network_errors_warning_delta: u64,
+    pub network_errors_critical_delta: u64,
+    pub docker_unhealthy_warning_count: u64,
+    pub docker_unhealthy_critical_count: u64,
+    pub docker_restarting_warning_count: u64,
+    pub docker_restarting_critical_count: u64,
+    pub docker_exited_warning_count: u64,
+    pub docker_exited_critical_count: u64,
+    pub docker_other_abnormal_warning_count: u64,
+    pub docker_other_abnormal_critical_count: u64,
 }
 
 impl Default for Thresholds {
@@ -196,6 +207,16 @@ impl Default for Thresholds {
             gpu_temp_critical: 90.0,
             gpu_idle_memory_percent: 80.0,
             gpu_idle_util_percent: 10.0,
+            network_errors_warning_delta: 1,
+            network_errors_critical_delta: 10,
+            docker_unhealthy_warning_count: 1,
+            docker_unhealthy_critical_count: 1,
+            docker_restarting_warning_count: 1,
+            docker_restarting_critical_count: 1,
+            docker_exited_warning_count: 1,
+            docker_exited_critical_count: 10,
+            docker_other_abnormal_warning_count: 1,
+            docker_other_abnormal_critical_count: 10,
         }
     }
 }
@@ -208,9 +229,7 @@ pub struct ProbeReport {
     pub identity: MachineIdentity,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deployment: Option<DeploymentMetadata>,
-    pub status: Status,
     pub elapsed_seconds: f64,
-    pub checks: Vec<CheckResult>,
     pub metrics: serde_json::Value,
     pub errors: BTreeMap<String, String>,
 }

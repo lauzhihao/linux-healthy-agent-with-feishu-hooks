@@ -147,7 +147,7 @@ Documentation=https://github.com/lauzhihao/linux-healthy-agent-with-feishu-hooks
 Type=oneshot
 Environment=LINUX_HEALTHY_AGENT_OUTPUT_FILE=/run/linux-healthy-agent/latest.json
 EnvironmentFile=-/etc/linux-healthy-agent.env
-ExecStart=${DEST} --alert-state-file /run/linux-healthy-agent-alert.json --output-file \${LINUX_HEALTHY_AGENT_OUTPUT_FILE}
+ExecStart=${DEST} --output-file \${LINUX_HEALTHY_AGENT_OUTPUT_FILE}
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
@@ -173,8 +173,12 @@ TIMER
     if [ ! -e /etc/linux-healthy-agent.env ]; then
         umask 077
         cat >/etc/linux-healthy-agent.env <<'ENVFILE'
-# Optional. Do not commit real webhook URLs to Git.
+# Optional alert mode. Disabled unless LINUX_HEALTHY_AGENT_ENABLE_ALERTS is true.
+# Do not commit real webhook URLs to Git.
+# LINUX_HEALTHY_AGENT_ENABLE_ALERTS=false
 # FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/REPLACE_ME
+# LINUX_HEALTHY_AGENT_ALERT_THRESHOLDS_FILE=/etc/linux-healthy-agent-alert-thresholds.json
+# LINUX_HEALTHY_AGENT_ALERT_STATE_FILE=/run/linux-healthy-agent-alert.json
 # Optional. Used as the machine label in Feishu alerts.
 # LINUX_HEALTHY_AGENT_INSTANCE_NAME=prod-gpu-eu-01
 # Optional. Used by Host Fleet snapshot aggregation.
